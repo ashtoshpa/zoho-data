@@ -1,0 +1,105 @@
+import requests
+import pandas as pd
+from datetime import datetime, timedelta
+
+# Function to refresh access token using refresh token
+def refresh_access_token(refresh_token):
+    refresh_url = "https://accounts.zoho.com/oauth/v2/token"
+    refresh_params = {
+        "refresh_token": refresh_token,
+        "client_id": "1000.VEPAX9T8TKDWJZZD95...............",
+        "client_secret": "acca291b89430180ced1...............",
+        "grant_type": "refresh_token"
+    }
+    response = requests.post(refresh_url, data=refresh_params)
+    return response.json().get("access_token")
+
+# Function to fetch a chunk of tickets
+def fetch_tickets_chunk(auth_token, refresh_token, from_val, chunk_size=100, createdTimeRange=None):
+    base_url = 'https://desk.zoho.com/api/v1/tickets/search'
+    params = {
+        'limit': chunk_size,
+        'sortBy': 'createdTime',
+        'from': from_val,
+        'createdTimeRange': createdTimeRange
+    }
+
+    headers = {
+        'orgId': '75744....',
+        'Authorization': "Zoho-oauthtoken " + auth_token,
+    }
+
+    response = requests.get(base_url, params=params, headers=headers)
+
+    if response.status_code == 200:
+        return response.json().get('data', [])
+    elif response.status_code == 401:  # Unauthorized, try to refresh token
+        new_auth_token = refresh_access_token(refresh_token)
+        if new_auth_token:
+            return fetch_tickets_chunk(new_auth_token, refresh_token, from_val, chunk_size, createdTimeRange)
+        else:
+            print("Failed to refresh access token.")
+            return []
+    else:
+        print("Request not successful, Response code", response.status_code)
+        return []
+
+# Function to fetch the latest tickets
+def fetch_latest_tickets(auth_token, refresh_token, days_back=0, limit=4999):
+    all_tickets = []  # Store dictionaries of ticket information
+
+    # Calculate the date range from today going back days_back days
+    today = datetime.utcnow()
+    start_date = today - timedelta(days=days_back)
+    start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    today = today.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+    start_date = start_date.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+
+    created_time_range = start_date + "," + today
+
+    while len(all_tickets) < limit:
+        chunk_tickets = fetch_tickets_chunk(auth_token, refresh_token, len(all_tickets),
+                                            min(limit - len(all_tickets), 100), created_time_range)
+        if not chunk_tickets:
+            break
+
+        all_tickets.extend(chunk_tickets)
+
+    return all_tickets
+
+# Fetch and process the latest 10,000 tickets starting from today
+auth_token = "1000.61a93f544d0e53193ad0c84907f93072.............................."
+refresh_token = "1000.3f22811ada541fee50f587d2aa21a5e1............................"
+
+# Provide value for days_back so that records will be fetched from today to (today - days_back)
+days_back = 1200
+
+latest_10000_tickets = fetch_latest_tickets(auth_token, refresh_token, days_back, limit=4999)
+
+# Process and display the fetched tickets as needed
+columns = [
+    "id", "createdTime", "ticketNumber", "customFields", 
+        "modifiedTime", "subCategory", "statusType", "dueDate", "departmentId",
+        "channel", "onholdTime", "language", "resolution", "sharedDepartments",
+        "closedTime", "isOverDue", "contact", "customerResponseTime", "productId",
+        "contactId", "threadCount", "secondaryContacts", "priority", "classification",
+        "commentCount", "accountId", "phone", "webUrl", "assignee", "isSpam",
+        "status", "entitySkills", "isArchived", "isRead", "responseDueDate",
+        "modifiedBy", "department", "email", "product", "cf", "slaId", "lastThread",
+        "team", "layoutId", "assigneeId", "createdBy", "teamId", "isEscalated",
+        "category"
+]
+
+data = {col: [] for col in columns}
+for ticket in latest_10000_tickets:
+    for col in columns:
+        data[col].append(ticket.get(col, None))
+
+zohoData = pd.DataFrame(data)
+zohoData.sort_values(by=['createdTime'], inplace=True)
+print(zohoData)
+
+excel_file_name = "zoho_tickets.xlsx"  # Change the file name as needed
+zohoData.to_excel(excel_file_name, index=False)
+print("Data saved to {excel_file_name}")
